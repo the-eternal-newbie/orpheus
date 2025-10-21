@@ -1,71 +1,76 @@
 import csv
 import json
-import time
 
 from datetime import datetime
-from utils.logger import RadLogger, SpinnerStyle
+
+from pathlib import Path
+from pyparsing import Any
 
 class FilesManager:
     filename = None
-    root = './data/'
-    csv_fieldnames = ['name', 'artist', 'album', 'release_date']
+    folder_roots = {
+        "data": "./data",
+        "logs": "./logs",
+    }
 
     def __init__(self, verbose=False, filename=None):
-        self.log = RadLogger(
-            name="SpotifyService", 
-            show_timestamp=True,
-            show_emoji=True,
-            colored=True,
-            log_file="spotify_service.log"
-        )
         self.verbose = verbose
         self.filename = filename
 
-    def __save_to_json(self, tracks):
-        if self.filename is None:
-            self.filename = f"spotify_library_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    def __strip_colors(self, text: str | list[str]) -> str:
+        import re
 
-        with open(self.root + self.filename, 'w', encoding='utf-8') as f:
-            json.dump(tracks, f, indent=2, ensure_ascii=False)
+        if isinstance(text, list):
+            text = "\n".join(text)
 
-        if self.verbose:
-            self.log.info(f"Saved {len(tracks)} tracks to:")
-            self.log.file_operation("write", self.filename, success=True)
+        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+        return ansi_escape.sub("", text)
 
-        return self.filename
+    def read_file(self, path: Path, mode="bulk") -> list[str]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
 
-    def __save_to_csv(self, tracks):
-        if self.filename is None:
-            self.filename = f"spotify_library_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            if mode == "bulk":
+                return [text]
+            elif mode == "lines":
+                return text.splitlines()
+            else:
+                return [line for line in text.splitlines() if line]
+        except Exception as e:
+            print(f"Error reading file: {e}")
 
-        with open(self.root + self.filename, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=self.csv_fieldnames, extrasaction='ignore')
-            writer.writeheader()
-            writer.writerows(tracks)
-        
-        
-        if self.verbose:
-            self.log.info(f"Saved {len(tracks)} tracks to:")
-            self.log.file_operation("write", self.filename, success=True)
-        
-        return self.filename
-    
-    def save_tracks(self, tracks, formats=('csv', 'json')):
-        if self.verbose:
-            self.log.section("Saving tracks to files")
+    def write_to_file(self, data: str | list[str], prefix=None, **kwargs: Any) -> str:
+        ext = kwargs.get("ext", "txt")
+        filetype = kwargs.get("filetype", "data")
+        mode = kwargs.get("mode", "w")
+        strip_formatting = kwargs.get("strip_formatting", False)
 
-        if not tracks:
-            self.log.warning("No tracks to save!")
-            return None, None
+        prefix = prefix if prefix else "output"
+        auto_filename = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        filename = kwargs.get("filename", auto_filename)
+        path_to_write = f"{self.folder_roots.get(filetype, self.folder_roots['data'])}/{filename}.{ext}"
 
-        self.log.spinner("Writing to disk...", SpinnerStyle.DOTS2)
+        with open(path_to_write, mode, encoding="utf-8") as file_to_write:
+            clean_data = self.__strip_colors(data) if strip_formatting else data
 
-        csv_file = self.__save_to_csv(tracks) if 'csv' in formats else None
-        time.sleep(0.5)
-        json_file = self.__save_to_json(tracks) if 'json' in formats else None
-        
-        if self.verbose:
-            self.log.stop_spinner("Files saved successfully!", success=True)
-            self.log.end_section()
+            if ext == "json":
+                json_indent = kwargs.get("json_indent", 2)
+                json.dump(
+                    clean_data, file_to_write, indent=json_indent, ensure_ascii=False
+                )
+            elif ext == "csv":
+                csv_fieldnames = kwargs.get("csv_fieldnames")
 
-        return csv_file, json_file
+                if csv_fieldnames is None:
+                    self.log.error("CSV fieldnames must be provided for CSV export.")
+                    return
+
+                writer = csv.DictWriter(
+                    file_to_write, fieldnames=csv_fieldnames, extrasaction="ignore"
+                )
+                writer.writeheader()
+                writer.writerows(clean_data)
+            else:
+                file_to_write.write(clean_data)
+
+        return path_to_write
